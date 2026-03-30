@@ -1,0 +1,8 @@
+# Ignorar todo lo pesado
+*.csv
+*.png
+*.jpg
+*.jpeg
+*.task
+*.pth
+ColorimetrIA_env/
