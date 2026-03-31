@@ -9,10 +9,13 @@ import numpy as np
 
 # 1. Preparación de Datos (Usando el archivo Gold Standard)
 print("Cargando el dataset Gold Standard...")
-df = pd.read_csv('colorimetry_master_index.csv')
+df = pd.read_csv('colorimetry_master_index_patched.csv')
 
-# Seleccionamos las 5 features biométricas
-X = df[['Skin_L', 'Skin_b', 'Chroma', 'Iris_L', 'Iris_b']].values
+# Filtrar nulos si falla el extractor de cabellos o iris
+df = df.dropna(subset=['Skin_L', 'Skin_b', 'Chroma', 'Iris_L', 'Iris_b', 'Hair_L', 'Hair_b', 'Season_12'])
+
+# Seleccionamos las 7 features biométricas
+X = df[['Skin_L', 'Skin_b', 'Chroma', 'Iris_L', 'Iris_b', 'Hair_L', 'Hair_b']].values
 le = LabelEncoder()
 y = le.fit_transform(df['Season_12'])
 NUM_CLASSES = len(le.classes_)
@@ -38,7 +41,7 @@ train_loader = DataLoader(train_dataset, batch_size=4096, shuffle=True)
 class ColorNet(nn.Module):
     def __init__(self, num_classes):
         super(ColorNet, self).__init__()
-        self.fc1 = nn.Linear(5, 128)
+        self.fc1 = nn.Linear(7, 128)
         self.fc2 = nn.Linear(128, 64)
         self.fc3 = nn.Linear(64, num_classes)
         self.dropout = nn.Dropout(0.2)

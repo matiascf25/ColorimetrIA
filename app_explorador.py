@@ -31,6 +31,22 @@ PALETTES_12 = {
     "Soft Autumn": ["#BC8F8F", "#A0522D", "#6B8E23", "#CD853F", "#8FBC8F"]
 }
 
+# DICCIONARIO DE COLORES A EVITAR (HEX)
+PALETTES_AVOID_12 = {
+    "Deep Autumn": ["#F0F8FF", "#FFE4E1", "#E6E6FA", "#00FFFF", "#FF00FF"],
+    "Deep Winter": ["#FFA500", "#FFD700", "#D2691E", "#FF8C00", "#BDB76B"],
+    "Light Spring": ["#000000", "#191970", "#4B0082", "#2F4F4F", "#8B0000"],
+    "Light Summer": ["#8B4513", "#D2691E", "#FF4500", "#556B2F", "#B8860B"],
+    "True Winter": ["#DAA520", "#CD853F", "#8B4513", "#D2691E", "#556B2F"],
+    "True Summer": ["#FF8C00", "#FFD700", "#FF4500", "#8B4513", "#B8860B"],
+    "True Autumn": ["#FF00FF", "#00FFFF", "#FF1493", "#0000FF", "#E6E6FA"],
+    "True Spring": ["#708090", "#2F4F4F", "#778899", "#A9A9A9", "#000000"],
+    "Clear Winter": ["#F5DEB3", "#D2B48C", "#808000", "#CD853F", "#A0522D"],
+    "Clear Spring": ["#4682B4", "#778899", "#808080", "#708090", "#C0C0C0"],
+    "Soft Summer": ["#FF0000", "#FF4500", "#FFFF00", "#000000", "#00FF00"],
+    "Soft Autumn": ["#0000FF", "#FF00FF", "#FFFFFF", "#00FFFF", "#DC143C"]
+}
+
 # 2. CARGA DE MODELO PyTorch (ColorNet)
 @st.cache_resource
 def load_colornet_model():
@@ -41,7 +57,7 @@ def load_colornet_model():
     class ColorNet(nn.Module):
         def __init__(self, num_classes):
             super(ColorNet, self).__init__()
-            self.fc1 = nn.Linear(5, 128)
+            self.fc1 = nn.Linear(7, 128)
             self.fc2 = nn.Linear(128, 64)
             self.fc3 = nn.Linear(64, num_classes)
             self.dropout = nn.Dropout(0.2)
@@ -59,9 +75,9 @@ def load_colornet_model():
     
     return scaler, le, model
 
-def predict_season_nn(skin_L, skin_b, skin_c, iris_L, iris_b, scaler, le, model):
-    # El modelo se entrenó con: ['Skin_L', 'Skin_b', 'Chroma', 'Iris_L', 'Iris_b']
-    x = np.array([[skin_L, skin_b, skin_c, iris_L, iris_b]])
+def predict_season_nn(skin_L, skin_b, skin_c, iris_L, iris_b, hair_L, hair_b, scaler, le, model):
+    # El modelo se entrenó con: ['Skin_L', 'Skin_b', 'Chroma', 'Iris_L', 'Iris_b', 'Hair_L', 'Hair_b']
+    x = np.array([[skin_L, skin_b, skin_c, iris_L, iris_b, hair_L, hair_b]])
     x_scaled = scaler.transform(x)
     
     x_tensor = torch.FloatTensor(x_scaled)
@@ -110,13 +126,60 @@ def analyze_face_and_eyes(pil_image):
         i_rgb = np.mean(iris_roi, axis=(0, 1)) / 255.0
         i_lab = color.rgb2lab([[i_rgb]])[0][0]
         
+        # Medidas del rostro para escala
+        chin_y = detection.face_landmarks[0][152].y * h
+        front_y = detection.face_landmarks[0][10].y * h
+        face_h = chin_y - front_y
+        offset_y = int(face_h * 0.12) # 12% más arriba de la frente
+        offset_x = int(face_h * 0.1)  # Desplazamiento lateral
+
+        # Cabello: Sien izquierda alta (68) o derecha alta (298)
+        landmarks = detection.face_landmarks[0]
+        hair_L = None
+        hair_b = None
+        
+        # Hair Left
+        lx, ly = int(landmarks[68].x * w) - offset_x, int(landmarks[68].y * h) - int(offset_y * 0.7)
+        ly = max(5, min(h-5, ly))
+        lx = max(5, min(w-5, lx))
+        roi_hair = image_np[ly-5:ly+5, lx-5:lx+5]
+        
+        if roi_hair.size > 0:
+            h_rgb = np.mean(roi_hair, axis=(0, 1)) / 255.0
+            h_lab = color.rgb2lab([[h_rgb]])[0][0]
+            hair_L = h_lab[0]
+            hair_b = h_lab[2]
+        else:
+            # Hair Right
+            rx, ry = int(landmarks[298].x * w) + offset_x, int(landmarks[298].y * h) - int(offset_y * 0.7)
+            ry = max(5, min(h-5, ry))
+            rx = max(5, min(w-5, rx))
+            roi_hair_r = image_np[ry-5:ry+5, rx-5:rx+5]
+            if roi_hair_r.size > 0:
+                h_rgb = np.mean(roi_hair_r, axis=(0, 1)) / 255.0
+                h_lab = color.rgb2lab([[h_rgb]])[0][0]
+                hair_L = h_lab[0]
+                hair_b = h_lab[2]
+                
+        # Fallback de emergencia si no detecta cabello
+        if hair_L is None:
+            hair_L = s_lab[0]
+            hair_b = s_lab[2]
+            h_rgb = s_rgb
+        
         # Chroma de piel (el iris es menos saturado)
         skin_chroma = math.sqrt(s_lab[1]**2 + s_lab[2]**2)
         
         return {
             "skin_L": s_lab[0], "skin_b": s_lab[2], "skin_c": skin_chroma,
             "iris_L": i_lab[0], "iris_b": i_lab[2],
-            "coords": {"skin": (sx, sy), "iris": (ix, iy)}
+            "hair_L": hair_L, "hair_b": hair_b,
+            "coords": {"skin": (sx, sy), "iris": (ix, iy)},
+            "rgb": {
+                "skin": f"rgb({int(s_rgb[0]*255)}, {int(s_rgb[1]*255)}, {int(s_rgb[2]*255)})",
+                "iris": f"rgb({int(i_rgb[0]*255)}, {int(i_rgb[1]*255)}, {int(i_rgb[2]*255)})",
+                "hair": f"rgb({int(h_rgb[0]*255)}, {int(h_rgb[1]*255)}, {int(h_rgb[2]*255)})" if 'h_rgb' in locals() else f"rgb({int(s_rgb[0]*255)}, {int(s_rgb[1]*255)}, {int(s_rgb[2]*255)})"
+            }
         }
 
 # --- INTERFAZ ---
@@ -148,14 +211,36 @@ if up_file:
         
         with col_img:
             st.image(img_orig, caption="Rostro Detectado", use_container_width=True)
+            
+            # Swatches de lo que ve el modelo
+            st.markdown("#### Lo que la IA extrajo para su decisión:")
+            swatch_html = f"""
+            <div style="display: flex; gap: 15px; margin-bottom: 15px;">
+                <div style="text-align: center;">
+                    <div style="width: 60px; height: 60px; border-radius: 8px; background-color: {metrics['rgb']['skin']}; border: 1px solid #888; box-shadow: 2px 2px 5px rgba(0,0,0,0.2);"></div>
+                    <small><b>Piel</b></small>
+                </div>
+                <div style="text-align: center;">
+                    <div style="width: 60px; height: 60px; border-radius: 8px; background-color: {metrics['rgb']['iris']}; border: 1px solid #888; box-shadow: 2px 2px 5px rgba(0,0,0,0.2);"></div>
+                    <small><b>Iris</b></small>
+                </div>
+                <div style="text-align: center;">
+                    <div style="width: 60px; height: 60px; border-radius: 8px; background-color: {metrics['rgb']['hair']}; border: 1px solid #888; box-shadow: 2px 2px 5px rgba(0,0,0,0.2);"></div>
+                    <small><b>Cabello</b></small>
+                </div>
+            </div>
+            """
+            st.markdown(swatch_html, unsafe_allow_html=True)
+            
             st.write(f"**LAB Piel:** L: {metrics['skin_L']:.1f} | b: {metrics['skin_b']:.1f} | C: {metrics['skin_c']:.1f}")
             st.write(f"**LAB Iris:** L: {metrics['iris_L']:.1f} | b: {metrics['iris_b']:.1f}")
+            st.write(f"**LAB Cabello:** L: {metrics['hair_L']:.1f} | b: {metrics['hair_b']:.1f}")
 
         with col_pred:
             st.subheader("Resultados de IA (ColorNet)")
             
             # CLASIFICACIÓN MEDIANTE RED NEURONAL Pytorch
-            season, confidence = predict_season_nn(metrics['skin_L'], metrics['skin_b'], metrics['skin_c'], metrics['iris_L'], metrics['iris_b'], scaler, le, colornet_model)
+            season, confidence = predict_season_nn(metrics['skin_L'], metrics['skin_b'], metrics['skin_c'], metrics['iris_L'], metrics['iris_b'], metrics['hair_L'], metrics['hair_b'], scaler, le, colornet_model)
             
             st.success(f"### Estación: **{season}**")
             st.caption(f"**Confianza de Predicción:** `{confidence:.2f}%`")
@@ -163,9 +248,15 @@ if up_file:
             hex_list = PALETTES_12.get(season, ["#CCCCCC"])
             p_cols = st.columns(len(hex_list))
             for i, h in enumerate(hex_list):
-                p_cols[i].markdown(f'<div style="background-color:{h}; height:60px; border-radius:8px; border:1px solid white;"></div>', unsafe_allow_html=True)
+                p_cols[i].markdown(f'<div style="background-color:{h}; height:40px; border-radius:8px; border:1px solid white;"></div>', unsafe_allow_html=True)
             
-            st.info("¡Estación calculada mediante **ColorNet** (Red Neuronal PyTorch) usando Piel e Iris simultáneamente!")
+            st.markdown("##### ❌ Colores a Evitar")
+            hex_avoid = PALETTES_AVOID_12.get(season, ["#000000"])
+            a_cols = st.columns(len(hex_avoid))
+            for i, h in enumerate(hex_avoid):
+                a_cols[i].markdown(f'<div style="background-color:{h}; height:40px; border-radius:8px; border:1px solid #333; opacity:0.8;"></div>', unsafe_allow_html=True)
+                
+            st.info("¡Estación calculada mediante **ColorNet** (Red Neuronal PyTorch) usando Piel, Iris y Cabello simultáneamente!")
 
         # DRAPING TOTAL
         st.divider()
